@@ -45,3 +45,17 @@ negócios direto na API do Pipedrive. Requer, no ambiente, uma credencial para `
 A página calcula qualquer período a partir de `daily_ads` (um registro por anúncio e dia) e `deals`. O último dia é sempre
 D-1 (ontem) e o período anterior tem o mesmo número de dias. Alcance e frequência não se somam entre dias; por isso só
 existem para os períodos fixos (1, 7, 14 e 30 dias), que vêm prontos em `reach`.
+
+## Regra de leads (Gerenciador x CRM)
+
+Em campanhas de lead, o dashboard usa o **maior** entre a contagem do Gerenciador do Meta e a do CRM, calculado a cada
+período selecionado e por campanha:
+
+- **Formulário instantâneo** (`optimization_goal` LEAD_GENERATION/QUALITY_LEAD, destino ON_AD): se o Pipedrive tem menos
+  que os formulários preenchidos, vale o Gerenciador (leads que não chegaram ao CRM).
+- **Site / landing page** (OFFSITE_CONVERSIONS): se o CRM tem mais que o Gerenciador, vale o CRM (possível falha de rastreamento).
+- Outros objetivos (tráfego, engajamento) usam só o Gerenciador.
+
+Cada divergência gera uma observação (caixa na Visão geral e no CRM, linha sob o nome no Gerenciador e no pop-up do anúncio).
+Em conjuntos e anúncios a atribuição do CRM é parcial (depende de `utm_term`/`utm_content`), então só se avisa quando o CRM é maior.
+A atribuição do lead à campanha usa `utm_campaign` (nome ou ID), ou o conjunto/anúncio quando há `utm_content`/`utm_term`.

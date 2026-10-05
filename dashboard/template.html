@@ -105,7 +105,7 @@ th{background:var(--chip);font-size:10px;text-transform:uppercase;letter-spacing
 td{padding:12px 8px;border-top:1px solid var(--line);text-align:right;color:var(--ink2);white-space:nowrap}
 td b{color:var(--ink);font-weight:700}
 th.l,td.l{text-align:left}
-td.nm{white-space:normal;min-width:220px;max-width:340px;line-height:1.35}
+td.nm{white-space:normal;min-width:220px;max-width:290px;line-height:1.35}
 tr.tot td{background:var(--chip);font-weight:800;color:var(--ink)}
 .lnk{background:none;border:0;font:inherit;font-weight:700;color:var(--ink);cursor:pointer;text-align:left;padding:0}
 .lnk:hover{color:var(--accent);text-decoration:underline}
@@ -145,6 +145,9 @@ tr.tot td{background:var(--chip);font-weight:800;color:var(--ink)}
 .mf div{border-radius:10px;background:var(--chip);padding:10px 12px}
 .mf span{display:block;font-size:11px;color:var(--muted)} .mf b{font-size:16px;font-weight:800} .mf small{display:block;font-size:11px;color:var(--ink2)}
 .btn{padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-size:13px;color:var(--ink);font-family:inherit;font-weight:700;cursor:pointer}
+.obs{background:var(--warn-bg);border-radius:12px;padding:12px 16px;font-size:12.5px;line-height:1.5;margin-bottom:14px;color:var(--ink)}
+.obs b{font-weight:800}.obs p{margin:4px 0 6px;color:var(--ink2)}.obs ul{margin:0;padding-left:18px;color:var(--ink2)}.obs li{margin:2px 0}
+.obn{font-size:11px;font-weight:500;line-height:1.35;color:var(--warn);margin-top:4px;white-space:normal}.obn b{font-weight:800}
 .note{font-size:11.5px;color:var(--muted);margin-top:12px;line-height:1.5}
 @media (max-width:1100px){.g5{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.row2{grid-template-columns:1fr}}
 @media (max-width:820px){
@@ -245,8 +248,61 @@ function agg(range) {
   const ra = DATA.reach.account[k]; A.account.reach = ra ? ra._ : null;
   return AGG[k] = A;
 }
-const acct = w => { const r = R(); return (w === 'prev' && !r.prevOk) ? NULLM : M(agg(r[w]).account); };
-const rowOf = (lv, w, id) => { const r = R(); return (w === 'prev' && !r.prevOk) ? NULLM : M(agg(r[w])[lv][id]); };
+/* ---------- regra de leads: Gerenciador x CRM ----------
+   Em campanhas de lead usamos o MAIOR entre o Gerenciador (formulários preenchidos ou eventos de lead) e o CRM.
+   CRM maior que o Gerenciador pode indicar falha de rastreamento; Pipedrive menor que os formulários do
+   Gerenciador indica lead que não chegou ao CRM. Avaliado a cada período selecionado. */
+const KIND = {}, CAMP_OF = {adset: {}, ad: {}};
+DATA.entities.campaigns.forEach(c => KIND[c.id] = c.kind);
+DATA.entities.adsets.forEach(x => CAMP_OF.adset[x.id] = x.campaign_id);
+DATA.entities.ads.forEach(x => CAMP_OF.ad[x.id] = x.campaign_id);
+const leadKind = k => k === 'form' || k === 'site';
+function leadNote(kind, meta, crm) {
+  const d = Math.abs(meta - crm);
+  if (crm > meta) return kind === 'form'
+    ? `O CRM tem ${d} a mais que os formulários do Gerenciador (${crm} contra ${meta}): podem ser leads de outra origem ou duplicados. Usando o CRM.`
+    : `O CRM tem ${d} a mais que o Gerenciador (${crm} contra ${meta}): possível falha de rastreamento do pixel ou do evento de lead. Usando o CRM.`;
+  return kind === 'form'
+    ? `O Pipedrive tem ${d} a menos que os formulários preenchidos no Gerenciador (${crm} contra ${meta}): leads que não chegaram ao CRM (integração ou importação manual). Usando os formulários do Gerenciador.`
+    : `O Gerenciador tem ${d} a mais que o CRM (${meta} contra ${crm}). Usando o maior valor, o do Gerenciador.`;
+}
+function applyLeads(lv, id, raw, w) {
+  const campId = lv === 'campaign' ? id : CAMP_OF[lv][id], kind = KIND[campId];
+  if (!leadKind(kind)) return raw;
+  const meta = raw.leads, crm = (crmOf(w).by[lv][id]) || 0;
+  const base = Math.max(meta, crm);
+  // em conjuntos e anúncios a atribuição do CRM é parcial: só avisamos quando o CRM é maior
+  const note = (meta !== crm && (lv === 'campaign' || crm > meta)) ? leadNote(kind, meta, crm) : null;
+  return {...raw, leads: base, leads_meta: meta, leads_crm: crm, lead_note: note, lead_src: crm > meta ? 'CRM' : meta > crm ? 'Gerenciador' : null};
+}
+function acct(w) {
+  const r = R();
+  if (w === 'prev' && !r.prevOk) return NULLM;
+  const A = agg(r[w]), c = crmOf(w);
+  let base = 0, attributed = 0; const notes = [];
+  const ids = new Set([...Object.keys(A.campaign), ...Object.keys(c.by.campaign)]);
+  for (const id of ids) {
+    const raw = A.campaign[id] || {...ZERO}, m = applyLeads('campaign', id, raw, w);
+    base += m.leads; attributed += c.by.campaign[id] || 0;
+    if (m.lead_note) notes.push({name: entName('campaign', id), note: m.lead_note});
+  }
+  const unattr = Math.max(0, c.total - attributed);
+  return M({...A.account, leads: base, leads_meta: A.account.leads, leads_crm: c.total, lead_unattr: unattr, lead_notes: notes});
+}
+function rowOf(lv, w, id) {
+  const r = R();
+  if (w === 'prev' && !r.prevOk) return NULLM;
+  let raw = agg(r[w])[lv][id];
+  if (raw === undefined) { if (!(crmOf(w).by[lv][id] > 0)) return M(undefined); raw = {...ZERO}; }
+  return M(applyLeads(lv, id, raw, w));
+}
+function obsBox() {
+  const a = acct('cur');
+  if (!a.lead_notes || !a.lead_notes.length) return '';
+  return `<div class="obs"><b>Observação sobre os leads neste período</b>
+    <p>Gerenciador: ${nf(a.leads_meta)} · CRM (leads do Meta): ${nf(a.leads_crm)} · usados no dashboard: ${nf(a.leads)}. Nas campanhas de lead usamos o maior valor: os formulários preenchidos do Gerenciador, ou o CRM quando ele tem mais leads (pode indicar falha de rastreamento).${a.lead_unattr ? ` ${nf(a.lead_unattr)} lead${a.lead_unattr > 1 ? 's' : ''} do CRM sem campanha identificada.` : ''}</p>
+    <ul>${a.lead_notes.map(n => `<li><b>${esc(n.name)}:</b> ${esc(n.note)}</li>`).join('')}</ul></div>`;
+}
 const rowIds = (lv, w) => Object.keys(agg(R()[w])[lv]);
 const delta = (cur, prev, goodWhenUp) => {
   if (cur == null || prev == null || !isFinite(cur) || !isFinite(prev) || prev === 0) return {t: 'sem base de comparação', c: 'nt'};
@@ -261,7 +317,7 @@ const kpi = (label, cur, prev, fmt, goodUp, small) => {
 };
 
 /* ---------- CRM: negócios do Meta, filtrados por data de criação ---------- */
-const NACRM = {total: null, lost: null, spam: null, won: null, won_value: null, reasons: {}, lost_stage: {}, ads: {}, reach: {}};
+const NACRM = {by: {campaign: {}, adset: {}, ad: {}}, total: null, lost: null, spam: null, won: null, won_value: null, reasons: {}, lost_stage: {}, ads: {}, reach: {}};
 const CRMC = {};
 function crmOf(w) {
   const r = R();
@@ -272,13 +328,14 @@ function crmOf(w) {
   const reach = {};
   for (let i = 1; i <= 8; i++) reach[i] = rows.filter(x => x[1] >= i).length;
   const lost = rows.filter(x => x[2] === 'l'), won = rows.filter(x => x[2] === 'w');
-  const reasons = {}, lost_stage = {}, ads = {};
+  const reasons = {}, lost_stage = {}, ads = {}, by = {campaign: {}, adset: {}, ad: {}};
+  for (const x of rows) { if (x[7]) by.campaign[x[7]] = (by.campaign[x[7]] || 0) + 1; if (x[5]) by.adset[x[5]] = (by.adset[x[5]] || 0) + 1; if (x[4]) by.ad[x[4]] = (by.ad[x[4]] || 0) + 1; }
   for (const x of lost) { const rs = x[3] || 'SEM MOTIVO'; reasons[rs] = (reasons[rs] || 0) + 1; lost_stage[x[1]] = (lost_stage[x[1]] || 0) + 1; }
   for (const x of rows) {
     const a = ads[x[4] || 'sem_rastreio'] ||= {total: 0, r3: 0, r4: 0, r5: 0, r6: 0, r8: 0};
     a.total++; for (const n of [3, 4, 5, 6, 8]) if (x[1] >= n) a['r' + n]++;
   }
-  return CRMC[k] = {total: rows.length, reach, lost: lost.length, reasons, lost_stage, won: won.length, won_value: won.reduce((s, x) => s + (x[6] || 0), 0), spam: reasons['SPAM'] || 0, ads};
+  return CRMC[k] = {by, total: rows.length, reach, lost: lost.length, reasons, lost_stage, won: won.length, won_value: won.reduce((s, x) => s + (x[6] || 0), 0), spam: reasons['SPAM'] || 0, ads};
 }
 const funnelEst = w => {
   const c = crmOf(w), a = acct(w), out = [];
@@ -320,9 +377,9 @@ function lineChart() {
 function viewGeral() {
   const a = acct('cur'), b = acct('prev');
   const f = funnelEst('cur'), fp = funnelEst('prev'), r = R();
-  return `<div class="g4">
+  return obsBox() + `<div class="g4">
     ${kpi('Investimento', a.spend, b.spend, v => brl(v), false)}
-    ${kpi('Leads (Gerenciador Meta)', a.leads, b.leads, v => nf(v), true)}
+    ${kpi('Leads (Meta + CRM)', a.leads, b.leads, v => nf(v), true)}
     ${kpi('Custo por lead', a.cpl, b.cpl, v => brl(v, 2), false)}
     ${kpi('Custo até Conectados', f[2].cost, fp[2].cost, v => brl(v), false)}</div>
   <div class="g4">
@@ -332,7 +389,7 @@ function viewGeral() {
     ${kpi('CTR (link)', a.ctr, b.ctr, v => pct(v), true, true)}</div>
   ${a.reach == null ? '<div class="note" style="margin:-4px 0 14px">Alcance e frequência só existem para Ontem, 7, 14 e 30 dias: o Meta não permite somar o alcance de dias diferentes. CPM e CTR são calculados normalmente.</div>' : ''}
   <div class="row2">
-    <div class="card"><div class="ct">Leads por dia</div>
+    <div class="card"><div class="ct">Leads por dia <span class="hint">contagem do Gerenciador</span></div>
       <div class="leg"><span><i style="background:var(--accent)"></i>${r.n === 1 ? 'Últimos 14 dias' : 'Período atual'}</span>${r.n === 1 || !r.prevOk ? '' : '<span><i style="background:var(--prev)"></i>Período anterior</span>'}</div>${lineChart()}</div>
     <div class="card"><div class="ct">Avanço no funil do CRM</div><div class="hint" style="margin-bottom:10px">Leads do Meta por etapa e custo estimado até cada uma</div>
       <div class="fh"><span>Etapa</span><span></span><span>Leads</span><span>Custo</span></div>
@@ -375,6 +432,7 @@ function openAd(id) {
   <div class="mg">${cell('Gasto', m.spend, pm.spend, {f: v => brl(v), g: null})}${cell('Leads', m.leads, pm.leads, {f: v => nf(v), g: true})}${cell('Custo por lead', m.cpl, pm.cpl, {f: v => brl(v, 2), g: false})}${cell('CTR (link)', m.ctr, pm.ctr, {f: v => pct(v), g: true})}
   ${cell('Alcance', m.reach, pm.reach, {f: v => nf(v), g: null})}${cell('Frequência', m.freq, pm.freq, {f: v => nf(v, 2), g: null})}${cell('CPM', m.cpm, pm.cpm, {f: v => brl(v, 2), g: false})}
   <div><span>Hook rate</span><b>${vid ? pct(m.hook) : 'n/a'}</b><em class="nt">${vid ? 'vídeo assistido 25% ÷ impressões' : 'imagem, sem vídeo'}</em></div></div>
+  ${m.lead_note ? `<div class="obs"><b>Observação:</b> ${esc(m.lead_note)}</div>` : ''}
   <div class="ct" style="font-size:14px">Avanço no funil e custo por etapa <span class="hint">leads do CRM atribuídos a este anúncio</span></div>
   <div class="mf">${steps.map(([n, v], i) => `<div><span>${n}</span><b>${v == null ? '—' : nf(v)}</b><small>${i === 0 ? (m.leads ? brl(m.spend / m.leads, 2) + ' por lead' : '—') : (v ? brl(m.spend / v) + ' por etapa' : '—')}</small></div>`).join('')}</div>
   <div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="btn" id="goMgr">Ver no Gerenciador →</button></div>`;
@@ -391,7 +449,7 @@ function viewCRM() {
   const lostPct = c.total ? c.lost / c.total * 100 : null;
   const rate3 = f[2].rate == null ? null : f[2].rate * 100, rate3p = fp[2].rate == null ? null : fp[2].rate * 100;
   const kp = `<div class="g5">
-    ${kpi('Leads do Meta (Gerenciador)', a.leads, b.leads, v => nf(v), true, true)}
+    ${kpi('Leads (Meta + CRM)', a.leads, b.leads, v => nf(v), true, true)}
     ${kpi('Perdidos (CRM)', c.lost, cp.lost, v => nf(v), false, true)}
     ${kpi('Spam (CRM)', c.spam, cp.spam, v => nf(v), false, true)}
     ${kpi('Ganhos (CRM)', c.won, cp.won, v => nf(v), true, true)}
@@ -405,8 +463,8 @@ function viewCRM() {
   const maxR = Math.max(1, ...reasons.map(r => r[1]));
   const ls = Object.entries(c.lost_stage).sort((x, y) => +x[0] - +y[0]);
   const maxL = Math.max(1, ...ls.map(r => r[1]));
-  return kp + `<div class="card" style="margin-bottom:14px"><div class="ct">Custo real por etapa do funil</div>
-    <div class="hint" style="margin-bottom:10px">Custo = investimento no Meta (${brl(a.spend)}) ÷ leads que chegaram à etapa. Base: leads do Gerenciador; a taxa de avanço de cada etapa vem do CRM (${nf(c.total)} leads do Meta no CRM neste período).</div>
+  return obsBox() + kp + `<div class="card" style="margin-bottom:14px"><div class="ct">Custo real por etapa do funil</div>
+    <div class="hint" style="margin-bottom:10px">Custo = investimento no Meta (${brl(a.spend)}) ÷ leads que chegaram à etapa. Base: leads (maior entre Gerenciador e CRM); a taxa de avanço de cada etapa vem do CRM (${nf(c.total)} leads do Meta no CRM neste período).</div>
     <div class="tw"><table><tr><th class="l">Etapa</th><th class="l">Leads (estimado)</th><th>Custo atual</th><th>Custo anterior</th><th>Variação</th><th>Queda vs. etapa anterior</th></tr>${rows}</table></div>
     <div class="note">Queda: <span class="chp g">baixa</span> <span class="chp w">moderada</span> <span class="chp c">crítica</span> · A contagem por etapa é uma estimativa: taxa do CRM aplicada ao total de leads do Gerenciador. Etapa atual do negócio; perdidos contam na etapa em que estavam.</div></div>
   <div class="row2"><div class="card"><div class="ct">Motivos de perda</div><div class="hint">${nf(c.lost)} leads perdidos${lostPct != null ? ' (' + nf(lostPct, 0) + '% dos leads do CRM)' : ''} · custo estimado desperdiçado ${brl(c.total ? c.lost * a.spend / c.total : 0)}</div>
@@ -432,7 +490,8 @@ function viewGerenciador() {
   const cols = lv === 'campaign' ? 'Campanha' : lv === 'adset' ? 'Conjunto de anúncios' : 'Anúncio';
   const body = list.map(({e, m}) => {
     const st = STT[e.status] || [e.status || '—', ''];
-    const name = lv === 'ad' ? `<b>${esc(e.name)}</b>` : `<button class="lnk" data-drill="${esc(e.id)}">${esc(e.name)}</button>`;
+    const name = (lv === 'ad' ? `<b>${esc(e.name)}</b>` : `<button class="lnk" data-drill="${esc(e.id)}">${esc(e.name)}</button>`)
+      + (m.lead_note ? `<div class="obn"><b>Observação:</b> ${esc(m.lead_note)}</div>` : '');
     return `<tr><td class="l"><span class="sw ${e.on ? 'on' : ''}" title="Status no Meta (somente leitura)"></span></td><td class="l nm">${name}</td><td class="l"><span class="stt ${st[1]}">${esc(st[0])}</span></td>
     <td>${e.budget ? (e.budget_type || '') + ' ' + brl(e.budget) : '—'}</td><td><b>${m.leads ? nf(m.leads) : (m.spend ? '0' : '—')}</b></td><td><b>${brl(m.cpl, 2)}</b></td><td>${brl(m.spend)}</td><td>${nf(m.impressions)}</td><td>${nf(m.reach)}</td><td>${brl(m.cpm, 2)}</td><td>${pct(m.ctr)}</td><td>${nf(m.freq, 2)}</td></tr>`;
   }).join('');

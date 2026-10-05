@@ -109,8 +109,8 @@ def reach_rows(level, since, until):
 def fetch_entities(ids_by_kind, since_ts):
     flt = json.dumps([{"field": "updated_time", "operator": "GREATER_THAN", "value": since_ts}])
     spec = {
-        "campaigns": ("campaigns", "id,name,status,effective_status,daily_budget,lifetime_budget"),
-        "adsets": ("adsets", "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget"),
+        "campaigns": ("campaigns", "id,name,objective,status,effective_status,daily_budget,lifetime_budget"),
+        "adsets": ("adsets", "id,name,campaign_id,optimization_goal,destination_type,status,effective_status,daily_budget,lifetime_budget"),
         "ads": ("ads", "id,name,adset_id,campaign_id,status,effective_status,creative{thumbnail_url,object_type}"),
     }
     out = {}
@@ -130,10 +130,24 @@ def shape_entities(raw):
         d, l = x.get("daily_budget"), x.get("lifetime_budget")
         return (num(d) / 100 if d else None), ("Diário" if d else ("Vitalício" if l else None))
     ent = {"campaigns": [], "adsets": [], "ads": []}
+    goals = {}
+    for s in raw["adsets"]:
+        goals.setdefault(s["campaign_id"], []).append((s.get("optimization_goal"), s.get("destination_type")))
+
+    def kind(c):
+        # form = formulário instantâneo; site = conversão no site/landing page; other = demais objetivos
+        if c.get("objective") not in ("OUTCOME_LEADS", "LEAD_GENERATION"):
+            return "other"
+        gs = goals.get(c["id"], [])
+        if any(g in ("LEAD_GENERATION", "QUALITY_LEAD") or d == "ON_AD" for g, d in gs):
+            return "form"
+        return "site"
+
     for c in raw["campaigns"]:
         b, t = budget(c)
         ent["campaigns"].append({"id": c["id"], "name": c["name"], "status": c.get("effective_status"),
-                                 "on": c.get("status") == "ACTIVE", "budget": b, "budget_type": t})
+                                 "on": c.get("status") == "ACTIVE", "budget": b, "budget_type": t,
+                                 "objective": c.get("objective"), "kind": kind(c)})
     for s in raw["adsets"]:
         b, t = budget(s)
         ent["adsets"].append({"id": s["id"], "name": s["name"], "campaign_id": s["campaign_id"],
@@ -206,7 +220,13 @@ def is_meta(deal):
 
 def make_lookup(ent):
     lk = {"adset_id": {x["id"]: x["id"] for x in ent["adsets"]}, "adset_name": {}, "ad_by_name": {},
-          "ad_adset": {x["id"]: x["adset_id"] for x in ent["ads"]}, "ad_ids": {x["id"] for x in ent["ads"]}}
+          "ad_adset": {x["id"]: x["adset_id"] for x in ent["ads"]}, "ad_ids": {x["id"] for x in ent["ads"]},
+          "ad_campaign": {x["id"]: x["campaign_id"] for x in ent["ads"]},
+          "adset_campaign": {x["id"]: x["campaign_id"] for x in ent["adsets"]},
+          "campaign_id": {x["id"]: x["id"] for x in ent["campaigns"]}, "campaign_name": {}}
+    for x in ent["campaigns"]:
+        k = norm(x["name"])
+        lk["campaign_name"][k] = None if k in lk["campaign_name"] else x["id"]  # nome repetido não identifica a campanha
     for x in ent["adsets"]:
         lk["adset_name"].setdefault(norm(x["name"]), x["id"])
     for x in ent["ads"]:
@@ -248,9 +268,12 @@ def compact_deals(deals, lk):
                 ad = cands[0]
         if ad and not adset:
             adset = lk["ad_adset"].get(ad)
+        ucamp = str(cf.get(F_CAMPAIGN) or "").strip()
+        camp = lk["campaign_id"].get(ucamp) or lk["campaign_name"].get(norm(ucamp)) \
+            or lk["adset_campaign"].get(adset) or lk["ad_campaign"].get(ad) or ""
         st = {"won": "w", "lost": "l"}.get(d.get("status"), "o")
         out.append([day.isoformat(), pos, st, d.get("lost_reason") or "", ad or "", adset or "",
-                    d.get("value") or 0 if st == "w" else 0])
+                    d.get("value") or 0 if st == "w" else 0, camp])
     out.sort(key=lambda x: x[0])
     return out
 
@@ -272,6 +295,7 @@ def main():
     ap.add_argument("--pipedrive", action="store_true", help="busca os negócios direto na API do Pipedrive")
     ap.add_argument("--end", help="último dia dos dados (padrão: ontem, horário de Brasília)")
     ap.add_argument("--out", default="data.json")
+    ap.add_argument("--reuse", help="reaproveita daily_ads e reach de um data.json e refaz só entidades e CRM")
     a = ap.parse_args()
 
     today = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
@@ -279,7 +303,8 @@ def main():
     win = windows(end)
 
     # 1) dados diários por anúncio, de julho até D-1 (base de qualquer período escolhido na página)
-    rows = daily_ads(DATA_START, end)
+    old = json.load(open(a.reuse)) if a.reuse else None
+    rows = old["daily_ads"] if old else daily_ads(DATA_START, end)
     ids = {"ads": {r[1] for r in rows}, "adsets": {r[2] for r in rows}, "campaigns": {r[3] for r in rows}}
 
     # 2) entidades (nome, status, orçamento) das que tiveram gasto ou foram alteradas desde julho
@@ -287,8 +312,8 @@ def main():
     ent = shape_entities(fetch_entities({k: sorted(v) for k, v in ids.items()}, since_ts))
 
     # 3) alcance exato para os períodos fixos (alcance não se soma entre dias)
-    reach = {lv: {} for lv in ("campaign", "adset", "ad", "account")}
-    for p, w in win.items():
+    reach = old["reach"] if old else {lv: {} for lv in ("campaign", "adset", "ad", "account")}
+    for p, w in ([] if old else win.items()):
         for which in ("cur", "prev"):
             if w[which][0] < DATA_START:
                 continue
