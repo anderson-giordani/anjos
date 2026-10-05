@@ -12,6 +12,10 @@ Dashboard de Meta Ads + CRM (somente leads do Meta), com dados de **julho/2026 e
 
 ## Atualização diária (rotina das 06:00)
 
+Modo automático (sem conector): `python3 dashboard/build_data.py --pipedrive --out dashboard/data.json` busca os
+negócios direto na API do Pipedrive. Requer, no ambiente, uma credencial para `api.pipedrive.com`
+(cabeçalho `x-api-token`). Os passos 1 e 2 abaixo são o modo manual, com arquivos de `getDeals`.
+
 1. Buscar os negócios do funil NACIONAL no Pipedrive com `getDeals`:
    `pipeline_id=1`, `sort_by=add_time`, `sort_direction=desc`, `limit=500`,
    `custom_fields` = as quatro chaves de UTM abaixo. Repetir com `cursor` até o último negócio ter `add_time` anterior a 2026-07-01.

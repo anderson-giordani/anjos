@@ -47,6 +47,47 @@ def curl(url, params=None):
         raise RuntimeError(f"Meta API: {err.get('message')}")
 
 
+def fetch_pipedrive(since):
+    """Lê os negócios do funil NACIONAL pela API do Pipedrive (a credencial do ambiente injeta o token)."""
+    keys = ",".join([F_SOURCE, F_MEDIUM, F_CAMPAIGN, F_CONTENT, F_TERM])
+    deals, cursor = [], None
+    while True:
+        cmd = ["curl", "-sS", "-m", "90", "-G", "https://api.pipedrive.com/api/v2/deals",
+               "--data-urlencode", "pipeline_id=1", "--data-urlencode", "sort_by=add_time",
+               "--data-urlencode", "sort_direction=desc", "--data-urlencode", "limit=500",
+               "--data-urlencode", f"custom_fields={keys}"]
+        if cursor:
+            cmd += ["--data-urlencode", f"cursor={cursor}"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("Pipedrive: não foi possível acessar api.pipedrive.com. Adicione a credencial do Pipedrive "
+                     "(site permitido api.pipedrive.com, cabeçalho x-api-token) nas configurações do ambiente.")
+        out = r.stdout
+        try:
+            d = json.loads(out)
+        except ValueError:
+            sys.exit(f"Pipedrive: resposta inesperada: {out[:200]}")
+        if not d.get("success"):
+            sys.exit(f"Pipedrive: {d.get('error') or d}. Confira se a credencial do Pipedrive está no ambiente.")
+        batch = d.get("data") or []
+        deals += batch
+        cursor = (d.get("additional_data") or {}).get("next_cursor")
+        if not batch or not cursor or to_local_date(batch[-1]["add_time"]) < since:
+            return deals
+
+
+def load_deals(a, first):
+    if a.pipedrive:
+        return fetch_pipedrive(first)
+    deals = []
+    for f in a.deals or []:
+        raw = json.load(open(f))
+        deals += raw.get("data", raw) if isinstance(raw, dict) else raw
+    if not deals:
+        sys.exit("informe --pipedrive ou --deals arquivo.json")
+    return deals
+
+
 def paged(path, params):
     rows, url, p = [], f"{API}/{path}", dict(params)
     while True:
@@ -198,7 +239,8 @@ def make_lookup(ent):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--deals", nargs="+", required=True)
+    ap.add_argument("--deals", nargs="+", help="arquivos JSON de getDeals (alternativa ao --pipedrive)")
+    ap.add_argument("--pipedrive", action="store_true", help="busca os negócios direto na API do Pipedrive")
     ap.add_argument("--end")
     ap.add_argument("--out", default="data.json")
     ap.add_argument("--reuse", help="reaproveita as partes do Meta de um data.json existente e só refaz o CRM")
@@ -213,10 +255,7 @@ def main():
 
     if a.reuse:
         out = json.load(open(a.reuse))
-        deals = []
-        for f in a.deals:
-            raw = json.load(open(f))
-            deals += raw.get("data", raw) if isinstance(raw, dict) else raw
+        deals = load_deals(a, first)
         deals = [d for d in deals if to_local_date(d["add_time"]) >= DATA_START]
         out["crm"] = build_crm(deals, win, make_lookup(out["entities"]))
         out["deals_seen"] = len(deals)
@@ -268,10 +307,7 @@ def main():
     daily.sort(key=lambda x: x["date"])
 
     # --- CRM ---
-    deals = []
-    for f in a.deals:
-        raw = json.load(open(f))
-        deals += raw.get("data", raw) if isinstance(raw, dict) else raw
+    deals = load_deals(a, first)
     deals = [d for d in deals if to_local_date(d["add_time"]) >= DATA_START]
     crm = build_crm(deals, win, make_lookup(ent))
 
