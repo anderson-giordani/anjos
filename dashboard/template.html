@@ -426,7 +426,7 @@ function viewGerenciador() {
   if (S.status === 'gasto') list = list.filter(x => x.m.spend > 0);
   if (S.q) list = list.filter(x => norm(x.e.name).includes(norm(S.q)) || x.e.id.includes(S.q));
   list.sort((x, y) => y.m.spend - x.m.spend);
-  const tot = M(list.reduce((s, x) => { for (const k in EMPTY) s[k] += x.m[k] || 0; return s; }, {...EMPTY}));
+  const tot = M(list.reduce((s, x) => { for (const k in ZERO) s[k] += x.m[k] || 0; return s; }, {...ZERO}));
   const tabs = [['campanhas', 'Campanhas'], ['conjuntos', 'Conjuntos de anúncios'], ['anuncios', 'Anúncios']];
   const crumb = (S.mgrCamp || S.mgrSet) ? `<div class="crumb"><button data-clear="1">Todas as campanhas</button>${S.mgrCamp ? ' › ' + esc(entName('campaign', S.mgrCamp)) : ''}${S.mgrSet ? ' › ' + esc(entName('adset', S.mgrSet)) : ''}</div>` : '';
   const cols = lv === 'campaign' ? 'Campanha' : lv === 'adset' ? 'Conjunto de anúncios' : 'Anúncio';
@@ -486,8 +486,12 @@ document.addEventListener('change', ev => {
   else if (start > end) { S.rangeErr = 'A data inicial precisa ser anterior à final.'; }
   else if (start < DATA.start) { S.rangeErr = 'Os dados começam em ' + dmy(DATA.start) + '/' + DATA.start.slice(0, 4) + '.'; }
   else if (end > DATA.end) { S.rangeErr = 'O último dia possível é ontem (' + dmy(DATA.end) + ').'; }
-  else { S.rangeErr = ''; S.range = {kind: 'custom', start, end}; saveRange(); }
-  render();
+  else { S.rangeErr = ''; S.range = {kind: 'custom', start, end}; saveRange(); render(); return; }
+  // data inválida: mostra o aviso sem apagar o que a pessoa digitou
+  const box = document.querySelector('.cust');
+  let el = box.querySelector('.err');
+  if (!el) { el = document.createElement('div'); el.className = 'err'; box.appendChild(el); }
+  el.textContent = S.rangeErr;
 });
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeAd(); });
 render();
