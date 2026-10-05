@@ -63,13 +63,15 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.01em}
 .leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .hint{font-size:11.5px;color:var(--muted)}
 svg text{font-family:"Manrope",system-ui,sans-serif}
-.rec{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.rec:first-of-type{border-top:0}
-.rec .ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800}
-.ic.p{background:var(--bad-bg);color:var(--bad)} .ic.r{background:var(--warn-bg);color:var(--warn)} .ic.e{background:var(--good-bg);color:var(--good)} .ic.f{background:var(--soft);color:var(--accent2)}
-.rec b{font-size:13px;display:block;margin-bottom:2px}
-.rec p{font-size:12px;color:var(--ink2);line-height:1.45}
-.rec small{display:block;font-size:10.5px;color:var(--muted);margin-top:3px}
+.fr{display:grid;grid-template-columns:minmax(120px,170px) minmax(60px,1fr) 52px 78px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink2)}
+.fr:first-of-type{border-top:0}
+.fr .nm2{font-weight:700;color:var(--ink)}
+.fr .bar{height:10px;border-radius:5px;background:var(--chip)}
+.fr .bar i{display:block;height:100%;border-radius:5px;background:var(--accent2)}
+.fr .n{text-align:right;font-weight:800;color:var(--ink)}
+.fr .c{text-align:right}
+.fh{display:grid;grid-template-columns:minmax(120px,170px) minmax(60px,1fr) 52px 78px;gap:12px;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:700;padding-bottom:6px}
+.fh span:nth-child(n+3){text-align:right}
 .flt{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
 .sel{padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-size:13px;color:var(--ink2);font-family:inherit;font-weight:600;cursor:pointer}
 .sel.on{background:var(--soft);color:var(--ink);border-color:var(--accent)}
@@ -254,40 +256,9 @@ function lineChart(p) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Leads por dia">${g}${prev ? poly(prev, 'stroke="var(--prev)" stroke-width="2" stroke-dasharray="5 5"') : ''}${poly(cur, 'stroke="var(--accent)" stroke-width="2.6"')}${lab}<circle cx="${X(last)}" cy="${Y(cur[last])}" r="5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/></svg>`;
 }
 
-/* ---------- recomendações automáticas ---------- */
-function recommendations(p) {
-  const out = [], a = acct(p, 'cur'), ap = acct(p, 'prev');
-  const minLeads = {1: 2, 7: 5, 14: 8, 30: 10}[p];
-  const ads = Object.keys(DATA.rows.ad[p].cur).map(id => ({id, e: adEnt(id), m: rowOf('ad', p, 'cur', id)}));
-  const active = ads.filter(x => x.e.on);
-  const dead = active.filter(x => x.m.spend >= 100 && x.m.leads === 0);
-  if (dead.length) out.push({k: 'p', i: '!', sev: 1, t: `Pausar ${dead.length} anúncio${dead.length > 1 ? 's' : ''} sem resultado`, d: dead.slice(0, 3).map(x => x.e.name || x.id).join(', ') + ` gastou ${brl(dead.reduce((s, x) => s + x.m.spend, 0))} e não gerou nenhum lead.`, r: 'Regra: gasto acima de R$ 100 e 0 leads no período'});
-  if (a.cpl) {
-    ads.filter(x => x.m.leads >= minLeads && x.m.cpl > 1.5 * a.cpl).sort((x, y) => y.m.cpl - x.m.cpl).slice(0, 2).forEach(x =>
-      out.push({k: 'r', i: '↓', sev: 2, t: `Revisar ${x.e.name || x.id}`, d: `Custo por lead de ${brl(x.m.cpl)}, ${nf((x.m.cpl / a.cpl - 1) * 100, 0)}% acima da média da conta (${brl(a.cpl)}).`, r: 'Regra: custo por lead acima de 1,5× a média, com leads suficientes'}));
-    const best = ads.filter(x => x.m.leads >= minLeads).sort((x, y) => x.m.cpl - y.m.cpl)[0];
-    if (best && best.m.cpl < a.cpl) out.push({k: 'e', i: '↑', sev: 3, t: `Escalar ${best.e.name || best.id}`, d: `Menor custo por lead (${brl(best.m.cpl)}) e ${nf(best.m.leads / a.leads * 100, 0)}% de todos os leads. Considere subir o orçamento.`, r: 'Regra: menor custo por lead entre anúncios com leads suficientes'});
-  }
-  const f = funnelEst(p, 'cur');
-  if (crmOf(p, 'cur').total >= 10) {
-    let worst = null;
-    for (let k = 2; k <= 5; k++) { const prevN = f[k - 2].n, n = f[k - 1].n; if (prevN > 0) { const drop = (1 - n / prevN) * 100; if (drop > 60 && (!worst || drop > worst.drop)) worst = {k, drop}; } }
-    if (worst) out.push({k: 'f', i: '▾', sev: 2, t: `Gargalo entre ${DATA.stage_names[worst.k - 1]} e ${DATA.stage_names[worst.k]}`, d: `${nf(worst.drop, 0)}% dos leads se perdem nessa etapa.`, r: 'Regra: queda acima de 60% entre etapas do funil'});
-  }
-  const c = crmOf(p, 'cur');
-  if (c.lost >= 10) {
-    const bad = ['SPAM', 'CONTATO INVÁLIDO', 'SEM INTERAÇÃO'].reduce((s, k) => s + (c.reasons[k] || 0), 0);
-    if (bad / c.lost > 0.6) out.push({k: 'f', i: '!', sev: 2, t: 'Perdas por qualidade do contato', d: `${nf(bad / c.lost * 100, 0)}% das perdas são spam, contato inválido ou sem interação.`, r: 'Regra: mais de 60% das perdas nesses três motivos'});
-  }
-  if (a.freq && (a.freq > 2.5 || (ap.freq && a.freq > ap.freq * 1.25))) out.push({k: 'r', i: '↻', sev: 3, t: 'Frequência subindo', d: `Frequência de ${nf(a.freq, 2)} (antes ${nf(ap.freq, 2)}). O público pode estar saturando.`, r: 'Regra: frequência acima de 2,5 ou 25% maior que o período anterior'});
-  if (a.cpl && ap.cpl && a.cpl > ap.cpl * 1.2) out.push({k: 'p', i: '▲', sev: 1, t: 'Custo por lead piorou', d: `${brl(a.cpl)} contra ${brl(ap.cpl)} no período anterior.`, r: 'Regra: custo por lead 20% acima do período anterior'});
-  return out.sort((x, y) => x.sev - y.sev).slice(0, 5);
-}
-
 /* ---------- telas ---------- */
 function viewGeral() {
   const p = S.p, a = acct(p, 'cur'), b = acct(p, 'prev');
-  const recs = recommendations(p);
   const f = funnelEst(p, 'cur'), fp = funnelEst(p, 'prev');
   return `<div class="g4">
     ${kpi('Investimento', a.spend, b.spend, v => brl(v), false)}
@@ -302,8 +273,10 @@ function viewGeral() {
   <div class="row2">
     <div class="card"><div class="ct">Leads por dia</div>
       <div class="leg"><span><i style="background:var(--accent)"></i>${+p === 1 ? 'Últimos 14 dias' : 'Período atual'}</span>${+p === 1 ? '' : '<span><i style="background:var(--prev)"></i>Período anterior</span>'}</div>${lineChart(p)}</div>
-    <div class="card"><div class="ct">Recomendações <span class="hint">geradas automaticamente</span></div>
-      ${recs.length ? recs.map(r => `<div class="rec"><div class="ic ${r.k}">${r.i}</div><div><b>${esc(r.t)}</b><p>${esc(r.d)}</p><small>${esc(r.r)}</small></div></div>`).join('') : '<div class="empty">Nenhum alerta neste período.</div>'}</div>
+    <div class="card"><div class="ct">Avanço no funil do CRM</div><div class="hint" style="margin-bottom:10px">Leads do Meta por etapa e custo estimado até cada uma</div>
+      <div class="fh"><span>Etapa</span><span></span><span>Leads</span><span>Custo</span></div>
+      ${f.map(x => `<div class="fr"><div class="nm2">${x.k} · ${esc(x.name)}</div><div class="bar"><i style="width:${f[0].n ? x.n / f[0].n * 100 : 0}%"></i></div><div class="n">${nf(x.n)}</div><div class="c">${brl(x.cost)}</div></div>`).join('')}
+      <div style="margin-top:12px"><button class="btn" data-tab="crm">Ver funil completo no CRM →</button></div></div>
   </div>`;
 }
 
