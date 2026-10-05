@@ -218,11 +218,13 @@ const validRange = r => r && r.start >= DATA.start && r.end <= DATA.end && r.sta
 try {
   const saved = JSON.parse(localStorage.getItem('anjos.r') || 'null');
   if (saved && saved.kind === 'preset' && PRESETS.some(x => x[0] === saved.p)) S.range = saved;
+  else if (saved && saved.kind === 'max') S.range = saved;
   else if (saved && saved.kind === 'custom' && validRange(saved)) S.range = saved;
 } catch (e) {}
 function R() {
   let s, e;
   if (S.range.kind === 'custom') { s = S.range.start; e = S.range.end; }
+  else if (S.range.kind === 'max') { s = DATA.start; e = DATA.end; }
   else { e = DATA.end; s = addDays(e, -(S.range.p - 1)); }
   const n = diffDays(s, e) + 1, ps = addDays(s, -n), pe = addDays(s, -1);
   return {s, e, n, cur: [s, e], prev: [ps, pe], prevOk: ps >= DATA.start};
@@ -528,7 +530,7 @@ function render() {
   const nAl = alerts().items.length;
   $('alertbox').innerHTML = `<button class="nav alertbtn ${nAl ? '' : 'off'}" data-alert="1" aria-label="Alertas${nAl ? ': ' + nAl : ''}"><svg viewBox="0 0 24 24">${ICON.alerta}</svg>Alertas${nAl ? `<span class="bdg">${nAl}</span>` : ''}</button>`;
   const isC = S.range.kind === 'custom';
-  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${!isC && S.range.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('') + `<button class="chip ${isC ? 'on' : ''}" data-custom="1">Personalizado</button>`;
+  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${S.range.kind === 'preset' && S.range.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('') + `<button class="chip ${S.range.kind === 'max' ? 'on' : ''}" data-max="1" title="Desde ${dmy(DATA.start)}/${DATA.start.slice(0, 4)} até ontem">Máximo</button><button class="chip ${isC ? 'on' : ''}" data-custom="1">Personalizado</button>`;
   $('custom').innerHTML = isC ? `<div class="cust"><label>De <input type="date" id="cs" min="${DATA.start}" max="${DATA.end}" value="${S.range.start}"></label><label>até <input type="date" id="ce" min="${DATA.start}" max="${DATA.end}" value="${S.range.end}"></label><span class="hint">O último dia possível é ontem (${dmy(DATA.end)}).</span>${S.rangeErr ? `<div class="err">${esc(S.rangeErr)}</div>` : ''}</div>` : '';
   const T = {geral: ['Visão geral', DATA.account_name + ' · Meta Ads'], criativos: ['Criativos', 'Anúncios ordenados por custo por lead'], crm: ['CRM · Funil', 'Somente leads do Meta · funil NACIONAL · custo real por etapa'], gerenciador: ['Gerenciador', 'Conta ' + DATA.account]}[S.tab];
   $('title').textContent = T[0]; $('subtitle').textContent = T[1]; document.title = 'Dashboard ANJOS';
@@ -539,10 +541,11 @@ function render() {
   $('view').innerHTML = {geral: viewGeral, criativos: viewCriativos, crm: viewCRM, gerenciador: viewGerenciador}[S.tab]();
 }
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-tab],[data-p],[data-custom],[data-alert],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
+  const t = ev.target.closest('[data-tab],[data-p],[data-max],[data-custom],[data-alert],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
   if (!t) { if (ev.target === $('ov')) closeAd(); return; }
   if (t.dataset.tab) { S.tab = t.dataset.tab; try { location.hash = S.tab; } catch (e) {} render(); window.scrollTo(0, 0); }
   else if (t.dataset.p) { S.range = {kind: 'preset', p: +t.dataset.p}; S.rangeErr = ''; saveRange(); render(); }
+  else if (t.dataset.max) { S.range = {kind: 'max'}; S.rangeErr = ''; saveRange(); render(); }
   else if (t.dataset.custom) { const r = R(); S.range = {kind: 'custom', start: r.s, end: r.e}; S.rangeErr = ''; saveRange(); render(); }
   else if (t.dataset.alert) openAlerts();
   else if (t.dataset.ad) openAd(t.dataset.ad);
