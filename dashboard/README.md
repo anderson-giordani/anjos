@@ -6,7 +6,7 @@ Dashboard de Meta Ads + CRM (somente leads do Meta), com dados de **julho/2026 e
 
 | Arquivo | Para quê |
 |---|---|
-| `build_data.py` | Busca Meta (Graph API) e lê os negócios do Pipedrive; grava `data.json`. |
+| `build_data.py` | Busca Meta (dados diários por anúncio, julho até D-1) e os negócios do Pipedrive; grava `data.json`. |
 | `template.html` | Página do dashboard (menu, abas, pop-up, recomendações). |
 | `build_html.py` | Injeta `data.json` no template e grava `dist/index.html`. |
 
@@ -39,3 +39,9 @@ negócios direto na API do Pipedrive. Requer, no ambiente, uma credencial para `
 - **Atribuição por anúncio:** `utm_content` ou `utm_campaign` igual ao ID ou ao nome do anúncio.
 - **Comparação:** janela de mesmo tamanho imediatamente anterior (ex.: 30 dias vs. 30 dias anteriores).
 - **Motivo de ganho:** não existe no Pipedrive; a tela mostra um aviso até existir um campo.
+
+## Filtro de período
+
+A página calcula qualquer período a partir de `daily_ads` (um registro por anúncio e dia) e `deals`. O último dia é sempre
+D-1 (ontem) e o período anterior tem o mesmo número de dias. Alcance e frequência não se somam entre dias; por isso só
+existem para os períodos fixos (1, 7, 14 e 30 dias), que vêm prontos em `reach`.

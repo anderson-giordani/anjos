@@ -48,6 +48,11 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.01em}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{padding:8px 14px;border-radius:999px;background:var(--chip);font-size:13px;color:var(--ink2);border:0;cursor:pointer;font-family:inherit;font-weight:600}
 .chip.on{background:var(--ink);color:var(--surface)}
+.rangebox{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.cust{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12px;color:var(--ink2)}
+.cust label{display:flex;gap:6px;align-items:center;font-weight:700}
+.cust input{padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font-family:inherit;font-size:13px}
+.cust .err{color:var(--bad);font-weight:700;width:100%;text-align:right}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px 20px;min-width:0}
 .g4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:14px}
 .g5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:14px}
@@ -164,7 +169,7 @@ tr.tot td{background:var(--chip);font-weight:800;color:var(--ink)}
         <div class="sub" id="subtitle"></div>
         <div class="cmpl" id="cmpl"></div>
       </div>
-      <div class="chips" id="chips" role="group" aria-label="Período"></div>
+      <div class="rangebox"><div class="chips" id="chips" role="group" aria-label="Período"></div><div id="custom"></div></div>
     </div>
     <div id="view"></div>
   </main>
@@ -189,24 +194,60 @@ const ICON = {
   gerenciador: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 10h18M9 10v10"/>'
 };
 const TABS = [['geral', 'Visão geral'], ['criativos', 'Criativos'], ['crm', 'CRM'], ['gerenciador', 'Gerenciador']];
-const PRESETS = [['1', 'Ontem'], ['7', '7 dias'], ['14', '14 dias'], ['30', '30 dias']];
-const S = {tab: 'geral', p: '30', mgr: 'campanhas', mgrCamp: null, mgrSet: null, status: 'todos', q: '', ad: null};
+const PRESETS = [[1, 'Ontem'], [7, '7 dias'], [14, '14 dias'], [30, '30 dias']];
+const S = {tab: 'geral', range: {kind: 'preset', p: 30}, mgr: 'campanhas', mgrCamp: null, mgrSet: null, status: 'todos', q: '', ad: null};
 try { const h = location.hash.slice(1); if (TABS.some(t => t[0] === h)) S.tab = h; } catch (e) {}
-try { const p = localStorage.getItem('anjos.p'); if (p && DATA.windows[p]) S.p = p; } catch (e) {}
 
-/* ---------- métricas derivadas ---------- */
-const EMPTY = {spend: 0, impressions: 0, reach: 0, link_clicks: 0, leads: 0, video_p25: 0};
+/* ---------- período: o último dia é sempre D-1 (ontem); o anterior tem o mesmo tamanho ---------- */
+const dobj = s => new Date(s + 'T12:00:00');
+const addDays = (s, n) => { const d = dobj(s); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const diffDays = (a, b) => Math.round((dobj(b) - dobj(a)) / 864e5);
+const validRange = r => r && r.start >= DATA.start && r.end <= DATA.end && r.start <= r.end;
+try {
+  const saved = JSON.parse(localStorage.getItem('anjos.r') || 'null');
+  if (saved && saved.kind === 'preset' && PRESETS.some(x => x[0] === saved.p)) S.range = saved;
+  else if (saved && saved.kind === 'custom' && validRange(saved)) S.range = saved;
+} catch (e) {}
+function R() {
+  let s, e;
+  if (S.range.kind === 'custom') { s = S.range.start; e = S.range.end; }
+  else { e = DATA.end; s = addDays(e, -(S.range.p - 1)); }
+  const n = diffDays(s, e) + 1, ps = addDays(s, -n), pe = addDays(s, -1);
+  return {s, e, n, cur: [s, e], prev: [ps, pe], prevOk: ps >= DATA.start};
+}
+const minLeadsFor = () => { const n = R().n; return n >= 30 ? 10 : n >= 14 ? 8 : n >= 7 ? 5 : 2; };
+
+/* ---------- métricas: somadas dos dados diários por anúncio ---------- */
+const ZERO = {spend: 0, impressions: 0, reach: 0, link_clicks: 0, leads: 0, video_p25: 0};
+const NULLM = {spend: null, impressions: null, reach: null, link_clicks: null, leads: null, video_p25: null, cpl: null, ctr: null, cpm: null, freq: null, hook: null};
 const M = m => {
-  m = m || EMPTY;
+  m = m === undefined ? ZERO : m;
   return {...m,
     cpl: m.leads ? m.spend / m.leads : null,
     ctr: m.impressions ? m.link_clicks / m.impressions * 100 : null,
     cpm: m.impressions ? m.spend / m.impressions * 1000 : null,
-    freq: m.reach ? m.impressions / m.reach : null,
+    freq: m.reach && m.impressions ? m.impressions / m.reach : null,
     hook: m.impressions && m.video_p25 ? m.video_p25 / m.impressions * 100 : null};
 };
-const acct = (p, w) => M(DATA.account_totals[p][w]);
-const rowOf = (lv, p, w, id) => M((DATA.rows[lv][p][w] || {})[id]);
+const AGG = {};
+function agg(range) {
+  const k = range.join('|');
+  if (AGG[k]) return AGG[k];
+  const mk = () => ({spend: 0, impressions: 0, link_clicks: 0, leads: 0, video_p25: 0});
+  const add = (o, r) => { o.spend += r[4]; o.impressions += r[5]; o.link_clicks += r[6]; o.leads += r[7]; o.video_p25 += r[8]; };
+  const A = {ad: {}, adset: {}, campaign: {}, account: mk()};
+  for (const r of DATA.daily_ads) {
+    if (r[0] < range[0] || r[0] > range[1]) continue;
+    add(A.account, r); add(A.ad[r[1]] ||= mk(), r); add(A.adset[r[2]] ||= mk(), r); add(A.campaign[r[3]] ||= mk(), r);
+  }
+  // alcance não se soma entre dias: só existe para os períodos fixos (1, 7, 14 e 30 dias)
+  for (const lv of ['ad', 'adset', 'campaign']) { const rm = DATA.reach[lv][k]; for (const id in A[lv]) A[lv][id].reach = rm ? (rm[id] ?? null) : null; }
+  const ra = DATA.reach.account[k]; A.account.reach = ra ? ra._ : null;
+  return AGG[k] = A;
+}
+const acct = w => { const r = R(); return (w === 'prev' && !r.prevOk) ? NULLM : M(agg(r[w]).account); };
+const rowOf = (lv, w, id) => { const r = R(); return (w === 'prev' && !r.prevOk) ? NULLM : M(agg(r[w])[lv][id]); };
+const rowIds = (lv, w) => Object.keys(agg(R()[w])[lv]);
 const delta = (cur, prev, goodWhenUp) => {
   if (cur == null || prev == null || !isFinite(cur) || !isFinite(prev) || prev === 0) return {t: 'sem base de comparação', c: 'nt'};
   const v = (cur - prev) / Math.abs(prev) * 100;
@@ -218,13 +259,32 @@ const kpi = (label, cur, prev, fmt, goodUp, small) => {
   const d = delta(cur, prev, goodUp);
   return `<div class="card kp ${small ? 's' : ''}"><div class="l">${label}</div><div class="v">${fmt(cur)}</div><div class="ba">antes ${fmt(prev)}</div><div class="d ${d.c}">${d.t}</div></div>`;
 };
-const crmOf = (p, w) => DATA.crm[p][w];
-const funnelEst = (p, w) => {
-  const c = crmOf(p, w), a = acct(p, w);
-  const out = [];
+
+/* ---------- CRM: negócios do Meta, filtrados por data de criação ---------- */
+const NACRM = {total: null, lost: null, spam: null, won: null, won_value: null, reasons: {}, lost_stage: {}, ads: {}, reach: {}};
+const CRMC = {};
+function crmOf(w) {
+  const r = R();
+  if (w === 'prev' && !r.prevOk) return NACRM;
+  const range = r[w], k = range.join('|');
+  if (CRMC[k]) return CRMC[k];
+  const rows = DATA.deals.filter(x => x[0] >= range[0] && x[0] <= range[1]);
+  const reach = {};
+  for (let i = 1; i <= 8; i++) reach[i] = rows.filter(x => x[1] >= i).length;
+  const lost = rows.filter(x => x[2] === 'l'), won = rows.filter(x => x[2] === 'w');
+  const reasons = {}, lost_stage = {}, ads = {};
+  for (const x of lost) { const rs = x[3] || 'SEM MOTIVO'; reasons[rs] = (reasons[rs] || 0) + 1; lost_stage[x[1]] = (lost_stage[x[1]] || 0) + 1; }
+  for (const x of rows) {
+    const a = ads[x[4] || 'sem_rastreio'] ||= {total: 0, r3: 0, r4: 0, r5: 0, r6: 0, r8: 0};
+    a.total++; for (const n of [3, 4, 5, 6, 8]) if (x[1] >= n) a['r' + n]++;
+  }
+  return CRMC[k] = {total: rows.length, reach, lost: lost.length, reasons, lost_stage, won: won.length, won_value: won.reduce((s, x) => s + (x[6] || 0), 0), spam: reasons['SPAM'] || 0, ads};
+}
+const funnelEst = w => {
+  const c = crmOf(w), a = acct(w), out = [];
   for (let k = 1; k <= 8; k++) {
-    const rate = c.total ? c.reach[k] / c.total : 0;
-    const n = Math.round(a.leads * rate);
+    if (c.total == null || a.leads == null) { out.push({k, name: DATA.stage_names[k], n: null, cost: null, rate: null}); continue; }
+    const rate = c.total ? c.reach[k] / c.total : 0, n = Math.round(a.leads * rate);
     out.push({k, name: DATA.stage_names[k], n, cost: n ? a.spend / n : null, rate});
   }
   return out;
@@ -236,14 +296,14 @@ const entName = (lv, id) => {
 const adEnt = id => DATA.entities.ads.find(a => a.id === id) || {};
 
 /* ---------- gráfico de linha (leads por dia) ---------- */
-function lineChart(p) {
-  const win = DATA.windows[p];
-  const byDate = Object.fromEntries(DATA.daily.map(d => [d.date, d.leads]));
-  const days = (r, n) => { const out = []; const s = new Date(r[0] + 'T12:00:00'); for (let i = 0; i < n; i++) { const d = new Date(s); d.setDate(s.getDate() + i); out.push(d.toISOString().slice(0, 10)); } return out; };
+const LBD = {};
+for (const r of DATA.daily_ads) LBD[r[0]] = (LBD[r[0]] || 0) + r[7];
+function lineChart() {
+  const r = R(), days = (s, n) => Array.from({length: n}, (_, i) => addDays(s, i));
   let curDays, prevDays = null;
-  if (+p === 1) { const e = new Date(win.cur[1] + 'T12:00:00'); curDays = days([new Date(e - 13 * 864e5).toISOString().slice(0, 10)], 14); }
-  else { curDays = days(win.cur, +p); prevDays = days(win.prev, +p); }
-  const cur = curDays.map(d => byDate[d] ?? 0), prev = prevDays ? prevDays.map(d => byDate[d] ?? 0) : null;
+  if (r.n === 1) { const st = addDays(r.e, -13) < DATA.start ? DATA.start : addDays(r.e, -13); curDays = days(st, diffDays(st, r.e) + 1); }
+  else { curDays = days(r.s, r.n); if (r.prevOk) prevDays = days(r.prev[0], r.n); }
+  const cur = curDays.map(d => LBD[d] ?? 0), prev = prevDays ? prevDays.map(d => LBD[d] ?? 0) : null;
   const W = 640, H = 260, pl = 40, pr = 16, pt = 12, pb = 28;
   const mx = Math.max(1, ...cur, ...(prev || [0])) * 1.15;
   const X = i => pl + (cur.length === 1 ? 0 : i / (cur.length - 1)) * (W - pl - pr), Y = v => pt + (1 - v / mx) * (H - pt - pb);
@@ -258,8 +318,8 @@ function lineChart(p) {
 
 /* ---------- telas ---------- */
 function viewGeral() {
-  const p = S.p, a = acct(p, 'cur'), b = acct(p, 'prev');
-  const f = funnelEst(p, 'cur'), fp = funnelEst(p, 'prev');
+  const a = acct('cur'), b = acct('prev');
+  const f = funnelEst('cur'), fp = funnelEst('prev'), r = R();
   return `<div class="g4">
     ${kpi('Investimento', a.spend, b.spend, v => brl(v), false)}
     ${kpi('Leads (Gerenciador Meta)', a.leads, b.leads, v => nf(v), true)}
@@ -270,9 +330,10 @@ function viewGeral() {
     ${kpi('Frequência', a.freq, b.freq, v => nf(v, 2), null, true)}
     ${kpi('CPM', a.cpm, b.cpm, v => brl(v, 2), false, true)}
     ${kpi('CTR (link)', a.ctr, b.ctr, v => pct(v), true, true)}</div>
+  ${a.reach == null ? '<div class="note" style="margin:-4px 0 14px">Alcance e frequência só existem para Ontem, 7, 14 e 30 dias: o Meta não permite somar o alcance de dias diferentes. CPM e CTR são calculados normalmente.</div>' : ''}
   <div class="row2">
     <div class="card"><div class="ct">Leads por dia</div>
-      <div class="leg"><span><i style="background:var(--accent)"></i>${+p === 1 ? 'Últimos 14 dias' : 'Período atual'}</span>${+p === 1 ? '' : '<span><i style="background:var(--prev)"></i>Período anterior</span>'}</div>${lineChart(p)}</div>
+      <div class="leg"><span><i style="background:var(--accent)"></i>${r.n === 1 ? 'Últimos 14 dias' : 'Período atual'}</span>${r.n === 1 || !r.prevOk ? '' : '<span><i style="background:var(--prev)"></i>Período anterior</span>'}</div>${lineChart()}</div>
     <div class="card"><div class="ct">Avanço no funil do CRM</div><div class="hint" style="margin-bottom:10px">Leads do Meta por etapa e custo estimado até cada uma</div>
       <div class="fh"><span>Etapa</span><span></span><span>Leads</span><span>Custo</span></div>
       ${f.map(x => `<div class="fr"><div class="nm2">${x.k} · ${esc(x.name)}</div><div class="bar"><i style="width:${f[0].n ? x.n / f[0].n * 100 : 0}%"></i></div><div class="n">${nf(x.n)}</div><div class="c">${brl(x.cost)}</div></div>`).join('')}
@@ -287,15 +348,15 @@ function adTag(m, avg, minLeads, best) {
   return ['Ativo', ''];
 }
 function viewCriativos() {
-  const p = S.p, a = acct(p, 'cur');
-  const minLeads = {1: 2, 7: 5, 14: 8, 30: 10}[p];
-  let ads = Object.keys(DATA.rows.ad[p].cur).map(id => ({id, e: adEnt(id), m: rowOf('ad', p, 'cur', id), pm: rowOf('ad', p, 'prev', id)})).filter(x => x.m.spend > 0);
+  const a = acct('cur');
+  const minLeads = minLeadsFor();
+  let ads = rowIds('ad', 'cur').map(id => ({id, e: adEnt(id), m: rowOf('ad', 'cur', id), pm: rowOf('ad', 'prev', id)})).filter(x => x.m.spend > 0);
   ads.sort((x, y) => (x.m.cpl ?? 1e9) - (y.m.cpl ?? 1e9) || y.m.spend - x.m.spend);
   const bestId = (ads.find(x => x.m.leads >= minLeads) || {}).id;
   if (!ads.length) return '<div class="card empty">Nenhum anúncio com gasto neste período.</div>';
   return `<div class="flt"><span class="hint">Ordenados por custo por lead · clique em um card para ver os detalhes</span></div>
   <div class="cards">${ads.map(x => {
-    const [t, c] = adTag(x.m, a.cpl, minLeads, x.id === bestId), cr = (crmOf(p, 'cur').ads[x.id] || {});
+    const [t, c] = adTag(x.m, a.cpl, minLeads, x.id === bestId), cr = (crmOf('cur').ads[x.id] || {});
     const vid = x.e.format === 'VIDEO' || x.m.video_p25 > 0;
     return `<button class="card cr" data-ad="${esc(x.id)}"><div class="th">${x.e.thumb ? `<img src="${x.e.thumb}" alt="">` : ''}<span class="tag ${c}">${t}</span><div class="play ${vid ? '' : 'img'}"></div></div>
     <div class="cb"><div class="cn" title="${esc(x.e.name)}">${esc(x.e.name || x.id)}</div><div class="cm">${vid ? 'Vídeo' : 'Imagem'} · gasto ${brl(x.m.spend)}</div><div class="cs" title="${esc(entName('adset', x.e.adset_id))}">${esc(entName('adset', x.e.adset_id))}</div>
@@ -304,7 +365,7 @@ function viewCriativos() {
   }).join('')}</div>`;
 }
 function openAd(id) {
-  const p = S.p, m = rowOf('ad', p, 'cur', id), pm = rowOf('ad', p, 'prev', id), e = adEnt(id), cr = crmOf(p, 'cur').ads[id] || {};
+  const m = rowOf('ad', 'cur', id), pm = rowOf('ad', 'prev', id), e = adEnt(id), cr = crmOf('cur').ads[id] || {};
   const vid = e.format === 'VIDEO' || m.video_p25 > 0;
   const cell = (l, v, d, f) => { const dd = delta(v, d, f.g); return `<div><span>${l}</span><b>${f.f(v)}</b><em class="${dd.c}">${dd.t}${dd.t.startsWith('sem') ? '' : ' vs. anterior'}</em></div>`; };
   const steps = [['Leads', m.leads], ['Conectados', cr.r3], ['MQL', cr.r4], ['Reunião agendada', cr.r5], ['Reunião realizada', cr.r6], ['Fechamento', cr.r8]];
@@ -325,10 +386,10 @@ const closeAd = () => { $('ov').hidden = true; };
 
 function dropChip(q) { if (q == null) return ''; q = Math.max(0, q); const t = q <= 10 ? 'g' : q < 60 ? 'w' : 'c'; return `<span class="chp ${t}">${q <= 0.05 ? '0,0%' : '–' + nf(q, 1) + '%'}</span>`; }
 function viewCRM() {
-  const p = S.p, c = crmOf(p, 'cur'), cp = crmOf(p, 'prev'), a = acct(p, 'cur'), b = acct(p, 'prev');
-  const f = funnelEst(p, 'cur'), fp = funnelEst(p, 'prev');
+  const c = crmOf('cur'), cp = crmOf('prev'), a = acct('cur'), b = acct('prev');
+  const f = funnelEst('cur'), fp = funnelEst('prev');
   const lostPct = c.total ? c.lost / c.total * 100 : null;
-  const rate3 = f[2].rate * 100, rate3p = fp[2].rate * 100;
+  const rate3 = f[2].rate == null ? null : f[2].rate * 100, rate3p = fp[2].rate == null ? null : fp[2].rate * 100;
   const kp = `<div class="g5">
     ${kpi('Leads do Meta (Gerenciador)', a.leads, b.leads, v => nf(v), true, true)}
     ${kpi('Perdidos (CRM)', c.lost, cp.lost, v => nf(v), false, true)}
@@ -356,8 +417,8 @@ function viewCRM() {
 
 const STT = {ACTIVE: ['Ativa', 'a'], PAUSED: ['Pausada', ''], CAMPAIGN_PAUSED: ['Campanha pausada', ''], ADSET_PAUSED: ['Conjunto pausado', ''], WITH_ISSUES: ['Com problemas', 'l'], IN_PROCESS: ['Em processamento', 'l'], PENDING_REVIEW: ['Em análise', 'l'], DISAPPROVED: ['Reprovado', 'l'], ARCHIVED: ['Arquivada', ''], LEARNING: ['Em aprendizado', 'l']};
 function viewGerenciador() {
-  const p = S.p, lv = S.mgr === 'campanhas' ? 'campaign' : S.mgr === 'conjuntos' ? 'adset' : 'ad';
-  let list = DATA.entities[lv === 'ad' ? 'ads' : lv === 'adset' ? 'adsets' : 'campaigns'].map(e => ({e, m: rowOf(lv, p, 'cur', e.id)}));
+  const lv = S.mgr === 'campanhas' ? 'campaign' : S.mgr === 'conjuntos' ? 'adset' : 'ad';
+  let list = DATA.entities[lv === 'ad' ? 'ads' : lv === 'adset' ? 'adsets' : 'campaigns'].map(e => ({e, m: rowOf(lv, 'cur', e.id)}));
   const counts = {campanhas: DATA.entities.campaigns.length, conjuntos: DATA.entities.adsets.length, anuncios: DATA.entities.ads.length};
   if (lv !== 'campaign' && S.mgrCamp) list = list.filter(x => x.e.campaign_id === S.mgrCamp);
   if (lv === 'ad' && S.mgrSet) list = list.filter(x => x.e.adset_id === S.mgrSet);
@@ -387,22 +448,25 @@ const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLow
 
 /* ---------- render ---------- */
 function render() {
-  const p = S.p, w = DATA.windows[p];
+  const r = R();
   $('nav').innerHTML = TABS.map(([k, n]) => `<button class="nav ${S.tab === k ? 'on' : ''}" data-tab="${k}"><svg viewBox="0 0 24 24">${ICON[k]}</svg>${n}</button>`).join('');
-  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${S.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('');
+  const isC = S.range.kind === 'custom';
+  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${!isC && S.range.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('') + `<button class="chip ${isC ? 'on' : ''}" data-custom="1">Personalizado</button>`;
+  $('custom').innerHTML = isC ? `<div class="cust"><label>De <input type="date" id="cs" min="${DATA.start}" max="${DATA.end}" value="${S.range.start}"></label><label>até <input type="date" id="ce" min="${DATA.start}" max="${DATA.end}" value="${S.range.end}"></label><span class="hint">O último dia possível é ontem (${dmy(DATA.end)}).</span>${S.rangeErr ? `<div class="err">${esc(S.rangeErr)}</div>` : ''}</div>` : '';
   const T = {geral: ['Visão geral', DATA.account_name + ' · Meta Ads'], criativos: ['Criativos', 'Anúncios ordenados por custo por lead'], crm: ['CRM · Funil', 'Somente leads do Meta · funil NACIONAL · custo real por etapa'], gerenciador: ['Gerenciador', 'Conta ' + DATA.account]}[S.tab];
   $('title').textContent = T[0]; $('subtitle').textContent = T[1]; document.title = 'Dashboard ANJOS';
-  $('cmpl').innerHTML = `<b>${rng(w.cur)}</b> comparado com <b>${rng(w.prev)}</b> (mesmo nº de dias)`;
+  $('cmpl').innerHTML = `<b>${rng(r.cur)}</b> (${r.n} ${r.n === 1 ? 'dia' : 'dias'}) ` + (r.prevOk ? `comparado com <b>${rng(r.prev)}</b> (mesmo nº de dias)` : `sem período anterior com dados (os dados começam em ${dmy(DATA.start)}/${DATA.start.slice(0, 4)})`);
   const gen = new Date(DATA.generated_at);
   const gtxt = gen.toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'});
   $('upd').innerHTML = `<i></i>Atualização automática<b>${gtxt}</b>Dados até ${dmy(DATA.end)}`;
   $('view').innerHTML = {geral: viewGeral, criativos: viewCriativos, crm: viewCRM, gerenciador: viewGerenciador}[S.tab]();
 }
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-tab],[data-p],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
+  const t = ev.target.closest('[data-tab],[data-p],[data-custom],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
   if (!t) { if (ev.target === $('ov')) closeAd(); return; }
   if (t.dataset.tab) { S.tab = t.dataset.tab; try { location.hash = S.tab; } catch (e) {} render(); window.scrollTo(0, 0); }
-  else if (t.dataset.p) { S.p = t.dataset.p; try { localStorage.setItem('anjos.p', S.p); } catch (e) {} render(); }
+  else if (t.dataset.p) { S.range = {kind: 'preset', p: +t.dataset.p}; S.rangeErr = ''; saveRange(); render(); }
+  else if (t.dataset.custom) { const r = R(); S.range = {kind: 'custom', start: r.s, end: r.e}; S.rangeErr = ''; saveRange(); render(); }
   else if (t.dataset.ad) openAd(t.dataset.ad);
   else if (t.dataset.mgr) { S.mgr = t.dataset.mgr; render(); }
   else if (t.dataset.st) { S.status = t.dataset.st; render(); }
@@ -414,6 +478,17 @@ document.addEventListener('click', ev => {
   }
 });
 document.addEventListener('input', ev => { if (ev.target.id === 'q') { S.q = ev.target.value; const pos = ev.target.selectionStart; render(); const q = $('q'); q.focus(); q.setSelectionRange(pos, pos); } });
+const saveRange = () => { try { localStorage.setItem('anjos.r', JSON.stringify(S.range)); } catch (e) {} };
+document.addEventListener('change', ev => {
+  if (ev.target.id !== 'cs' && ev.target.id !== 'ce') return;
+  const start = $('cs').value, end = $('ce').value;
+  if (!start || !end) { S.rangeErr = 'Escolha as duas datas.'; }
+  else if (start > end) { S.rangeErr = 'A data inicial precisa ser anterior à final.'; }
+  else if (start < DATA.start) { S.rangeErr = 'Os dados começam em ' + dmy(DATA.start) + '/' + DATA.start.slice(0, 4) + '.'; }
+  else if (end > DATA.end) { S.rangeErr = 'O último dia possível é ontem (' + dmy(DATA.end) + ').'; }
+  else { S.rangeErr = ''; S.range = {kind: 'custom', start, end}; saveRange(); }
+  render();
+});
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeAd(); });
 render();
 </script>
