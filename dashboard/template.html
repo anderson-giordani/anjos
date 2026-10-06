@@ -55,6 +55,9 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.01em}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{padding:8px 14px;border-radius:999px;background:var(--chip);font-size:13px;color:var(--ink2);border:0;cursor:pointer;font-family:inherit;font-weight:600}
 .chip.on{background:var(--ink);color:var(--surface)}
+select.chip{appearance:auto;padding-right:8px;max-width:210px}
+select.chip.on option{background:var(--surface);color:var(--ink)}
+.chip.step{padding:8px 11px}
 .rangebox{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .cust{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12px;color:var(--ink2)}
 .cust label{display:flex;gap:6px;align-items:center;font-weight:700}
@@ -214,19 +217,26 @@ try { const h = location.hash.slice(1); if (TABS.some(t => t[0] === h)) S.tab = 
 const dobj = s => new Date(s + 'T12:00:00');
 const addDays = (s, n) => { const d = dobj(s); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const diffDays = (a, b) => Math.round((dobj(b) - dobj(a)) / 864e5);
+/* semanas de segunda a domingo, a partir da primeira segunda-feira com dados */
+const firstMonday = () => addDays(DATA.start, (8 - dobj(DATA.start).getDay()) % 7);
+const WEEKS = (() => { const out = []; for (let m = firstMonday(); m <= DATA.end; m = addDays(m, 7)) out.push(m); return out; })();
+const weekEnd = m => addDays(m, 6) > DATA.end ? DATA.end : addDays(m, 6);
 const validRange = r => r && r.start >= DATA.start && r.end <= DATA.end && r.start <= r.end;
 try {
   const saved = JSON.parse(localStorage.getItem('anjos.r') || 'null');
   if (saved && saved.kind === 'preset' && PRESETS.some(x => x[0] === saved.p)) S.range = saved;
   else if (saved && saved.kind === 'max') S.range = saved;
+  else if (saved && saved.kind === 'week' && WEEKS.includes(saved.start)) S.range = saved;
   else if (saved && saved.kind === 'custom' && validRange(saved)) S.range = saved;
 } catch (e) {}
 function R() {
   let s, e;
   if (S.range.kind === 'custom') { s = S.range.start; e = S.range.end; }
   else if (S.range.kind === 'max') { s = DATA.start; e = DATA.end; }
+  else if (S.range.kind === 'week') { s = S.range.start; e = weekEnd(s); }
   else { e = DATA.end; s = addDays(e, -(S.range.p - 1)); }
-  const n = diffDays(s, e) + 1, ps = addDays(s, -n), pe = addDays(s, -1);
+  // semana: compara com a semana anterior (na semana em andamento, com os mesmos dias da semana anterior)
+  const n = diffDays(s, e) + 1, ps = S.range.kind === 'week' ? addDays(s, -7) : addDays(s, -n), pe = addDays(ps, n - 1);
   return {s, e, n, cur: [s, e], prev: [ps, pe], prevOk: ps >= DATA.start};
 }
 const minLeadsFor = () => { const n = R().n; return n >= 30 ? 10 : n >= 14 ? 8 : n >= 7 ? 5 : 2; };
@@ -530,21 +540,25 @@ function render() {
   const nAl = alerts().items.length;
   $('alertbox').innerHTML = `<button class="nav alertbtn ${nAl ? '' : 'off'}" data-alert="1" aria-label="Alertas${nAl ? ': ' + nAl : ''}"><svg viewBox="0 0 24 24">${ICON.alerta}</svg>Alertas${nAl ? `<span class="bdg">${nAl}</span>` : ''}</button>`;
   const isC = S.range.kind === 'custom';
-  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${S.range.kind === 'preset' && S.range.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('') + `<button class="chip ${S.range.kind === 'max' ? 'on' : ''}" data-max="1" title="Desde ${dmy(DATA.start)}/${DATA.start.slice(0, 4)} até ontem">Máximo</button><button class="chip ${isC ? 'on' : ''}" data-custom="1">Personalizado</button>`;
+  $('chips').innerHTML = PRESETS.map(([k, n]) => `<button class="chip ${S.range.kind === 'preset' && S.range.p === k ? 'on' : ''}" data-p="${k}">${n}</button>`).join('') + `<select class="chip ${S.range.kind === 'week' ? 'on' : ''}" id="wk" aria-label="Selecionar semana (segunda a domingo)"><option value="" ${S.range.kind === 'week' ? '' : 'selected'}>Semana…</option>${[...WEEKS].reverse().map(m => `<option value="${m}" ${S.range.kind === 'week' && S.range.start === m ? 'selected' : ''}>${dmy(m)} – ${dmy(weekEnd(m))}${addDays(m, 6) > DATA.end ? ' (em andamento)' : ''}</option>`).join('')}</select>${S.range.kind === 'week' ? `<button class="chip step" data-wkstep="-1" aria-label="Semana anterior" ${WEEKS.indexOf(S.range.start) <= 0 ? 'disabled' : ''}>‹</button><button class="chip step" data-wkstep="1" aria-label="Próxima semana" ${WEEKS.indexOf(S.range.start) >= WEEKS.length - 1 ? 'disabled' : ''}>›</button>` : ''}` + `<button class="chip ${S.range.kind === 'max' ? 'on' : ''}" data-max="1" title="Desde ${dmy(DATA.start)}/${DATA.start.slice(0, 4)} até ontem">Máximo</button><button class="chip ${isC ? 'on' : ''}" data-custom="1">Personalizado</button>`;
   $('custom').innerHTML = isC ? `<div class="cust"><label>De <input type="date" id="cs" min="${DATA.start}" max="${DATA.end}" value="${S.range.start}"></label><label>até <input type="date" id="ce" min="${DATA.start}" max="${DATA.end}" value="${S.range.end}"></label><span class="hint">O último dia possível é ontem (${dmy(DATA.end)}).</span>${S.rangeErr ? `<div class="err">${esc(S.rangeErr)}</div>` : ''}</div>` : '';
   const T = {geral: ['Visão geral', DATA.account_name + ' · Meta Ads'], criativos: ['Criativos', 'Anúncios ordenados por custo por lead'], crm: ['CRM · Funil', 'Somente leads do Meta · funil NACIONAL · custo real por etapa'], gerenciador: ['Gerenciador', 'Conta ' + DATA.account]}[S.tab];
   $('title').textContent = T[0]; $('subtitle').textContent = T[1]; document.title = 'Dashboard ANJOS';
-  $('cmpl').innerHTML = `<b>${rng(r.cur)}</b> (${r.n} ${r.n === 1 ? 'dia' : 'dias'}) ` + (r.prevOk ? `comparado com <b>${rng(r.prev)}</b> (mesmo nº de dias)` : `sem período anterior com dados (os dados começam em ${dmy(DATA.start)}/${DATA.start.slice(0, 4)})`);
+  $('cmpl').innerHTML = `<b>${rng(r.cur)}</b> (${r.n} ${r.n === 1 ? 'dia' : 'dias'}${S.range.kind === 'week' ? (r.n < 7 ? ', semana em andamento' : ', semana de segunda a domingo') : ''}) ` + (r.prevOk ? `comparado com <b>${rng(r.prev)}</b> (mesmo nº de dias)` : `sem período anterior com dados (os dados começam em ${dmy(DATA.start)}/${DATA.start.slice(0, 4)})`);
   const gen = new Date(DATA.generated_at);
   const gtxt = gen.toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'});
   $('upd').innerHTML = `<i></i>Atualização automática<b>${gtxt}</b>Dados até ${dmy(DATA.end)}`;
   $('view').innerHTML = {geral: viewGeral, criativos: viewCriativos, crm: viewCRM, gerenciador: viewGerenciador}[S.tab]();
 }
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-tab],[data-p],[data-max],[data-custom],[data-alert],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
+  const t = ev.target.closest('[data-tab],[data-p],[data-max],[data-wkstep],[data-custom],[data-alert],[data-ad],[data-mgr],[data-st],[data-drill],[data-clear]');
   if (!t) { if (ev.target === $('ov')) closeAd(); return; }
   if (t.dataset.tab) { S.tab = t.dataset.tab; try { location.hash = S.tab; } catch (e) {} render(); window.scrollTo(0, 0); }
   else if (t.dataset.p) { S.range = {kind: 'preset', p: +t.dataset.p}; S.rangeErr = ''; saveRange(); render(); }
+  else if (t.dataset.wkstep) {
+    const i = WEEKS.indexOf(S.range.start) + (+t.dataset.wkstep);
+    if (i >= 0 && i < WEEKS.length) { S.range = {kind: 'week', start: WEEKS[i]}; S.rangeErr = ''; saveRange(); render(); }
+  }
   else if (t.dataset.max) { S.range = {kind: 'max'}; S.rangeErr = ''; saveRange(); render(); }
   else if (t.dataset.custom) { const r = R(); S.range = {kind: 'custom', start: r.s, end: r.e}; S.rangeErr = ''; saveRange(); render(); }
   else if (t.dataset.alert) openAlerts();
@@ -561,6 +575,10 @@ document.addEventListener('click', ev => {
 document.addEventListener('input', ev => { if (ev.target.id === 'q') { S.q = ev.target.value; const pos = ev.target.selectionStart; render(); const q = $('q'); q.focus(); q.setSelectionRange(pos, pos); } });
 const saveRange = () => { try { localStorage.setItem('anjos.r', JSON.stringify(S.range)); } catch (e) {} };
 document.addEventListener('change', ev => {
+  if (ev.target.id === 'wk') {
+    if (ev.target.value) { S.range = {kind: 'week', start: ev.target.value}; S.rangeErr = ''; saveRange(); }
+    render(); return;
+  }
   if (ev.target.id !== 'cs' && ev.target.id !== 'ce') return;
   const start = $('cs').value, end = $('ce').value;
   if (!start || !end) { S.rangeErr = 'Escolha as duas datas.'; }
