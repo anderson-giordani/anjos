@@ -1,0 +1,68 @@
+name: Atualizar dashboard ANJOS
+
+# Todo dia às 05:30 (Brasília, UTC-3) busca Meta + Pipedrive, monta a página e publica na Vercel.
+# Também pode ser rodado na hora: aba Actions > Atualizar dashboard ANJOS > Run workflow.
+on:
+  schedule:
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: atualizar-dashboard
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # o Meta limita chamadas; o script espera sozinho e tenta de novo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Conferir segredos
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          faltando=""
+          for v in META_ACCESS_TOKEN PIPEDRIVE_API_TOKEN VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!v}" ]; then faltando="$faltando $v"; fi
+          done
+          if [ -n "$faltando" ]; then
+            echo "::error::Faltam segredos no GitHub (Settings > Secrets and variables > Actions):$faltando"
+            exit 1
+          fi
+
+      - name: Buscar dados (Meta e Pipedrive)
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+        run: python3 dashboard/build_data.py --pipedrive --out dashboard/data.json
+
+      - name: Montar a página
+        run: python3 dashboard/build_html.py --standalone
+
+      - name: Publicar na Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          cp dashboard/vercel.json dashboard/site/vercel.json
+          cd dashboard/site
+          # a saída da Vercel traz endereços de deploy; em repositório público mostramos só o resultado
+          if saida=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" 2>&1); then
+            echo "Publicação na Vercel concluída."
+          else
+            echo "$saida" | tail -n 25
+            exit 1
+          fi

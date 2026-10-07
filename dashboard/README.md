@@ -59,3 +59,23 @@ período selecionado e por campanha:
 Cada divergência gera uma observação (caixa na Visão geral e no CRM, linha sob o nome no Gerenciador e no pop-up do anúncio).
 Em conjuntos e anúncios a atribuição do CRM é parcial (depende de `utm_term`/`utm_content`), então só se avisa quando o CRM é maior.
 A atribuição do lead à campanha usa `utm_campaign` (nome ou ID), ou o conjunto/anúncio quando há `utm_content`/`utm_term`.
+
+## Hospedagem independente: GitHub Actions + Vercel
+
+O workflow `.github/workflows/atualizar-dashboard.yml` roda todo dia às 05:30 (Brasília), busca Meta e Pipedrive, monta
+`dashboard/site/index.html` (`build_html.py --standalone`) e publica na Vercel pela CLI. Os dados **não** são gravados no
+repositório: a página com os números só existe na Vercel.
+
+Segredos necessários (GitHub: Settings > Secrets and variables > Actions):
+
+| Segredo | Onde obter |
+|---|---|
+| `META_ACCESS_TOKEN` | Business Settings > Usuários do sistema > gerar token com `ads_read` na conta de anúncios (não expira). |
+| `PIPEDRIVE_API_TOKEN` | Pipedrive > Preferências pessoais > API. |
+| `VERCEL_TOKEN` | vercel.com/account/tokens. |
+| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` | `cd dashboard/site && npx vercel link` e copiar de `.vercel/project.json`. |
+
+Observações:
+- Num repositório **público**, o GitHub desativa workflows agendados após 60 dias sem atividade no repositório.
+- A página não tem login. Quem souber o endereço vê os números. Para restringir o acesso, use a proteção da Vercel
+  (Settings > Deployment Protection) ou coloque um login na frente.

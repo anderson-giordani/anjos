@@ -11,8 +11,15 @@ Uso:
   (`deals`). Alcance e frequência não são somáveis entre dias, por isso vêm prontos só para os períodos
   fixos (1, 7, 14 e 30 dias) em `reach`.
 """
-import argparse, json, re, subprocess, sys, time, unicodedata
+import argparse, json, os, re, subprocess, sys, time, unicodedata
 from datetime import date, datetime, timedelta, timezone
+
+# Fora do ambiente do Claude (ex.: GitHub Actions), as credenciais vêm de variáveis de ambiente:
+#   META_ACCESS_TOKEN  - token de leitura (ads_read) do Meta; use um token de Usuário do Sistema, que não expira
+#   PIPEDRIVE_API_TOKEN - token de API do Pipedrive
+# Dentro do ambiente do Claude o proxy injeta as credenciais e essas variáveis não são necessárias.
+META_TOKEN = os.environ.get("META_ACCESS_TOKEN", "").strip()
+PD_TOKEN = os.environ.get("PIPEDRIVE_API_TOKEN", "").strip()
 
 ACCOUNT = "act_821566846073840"
 API = "https://graph.facebook.com/v21.0"
@@ -36,8 +43,11 @@ STAGE_NAMES = {
 
 # ---------------------------------------------------------------- Meta
 def curl(url, params=None):
+    params = dict(params or {})
+    if META_TOKEN and "access_token" not in params and "access_token=" not in url:
+        params["access_token"] = META_TOKEN
     cmd = ["curl", "-sS", "-m", "90", "-G", url]
-    for k, v in (params or {}).items():
+    for k, v in params.items():
         cmd += ["--data-urlencode", f"{k}={v}"]
     for attempt in range(12):
         out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
@@ -184,10 +194,12 @@ def fetch_pipedrive(since):
                "--data-urlencode", f"custom_fields={keys}"]
         if cursor:
             cmd += ["--data-urlencode", f"cursor={cursor}"]
+        if PD_TOKEN:
+            cmd += ["-H", f"x-api-token: {PD_TOKEN}"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            sys.exit("Pipedrive: não foi possível acessar api.pipedrive.com. Adicione a credencial do Pipedrive "
-                     "(site permitido api.pipedrive.com, cabeçalho x-api-token) nas configurações do ambiente.")
+            sys.exit("Pipedrive: não foi possível acessar api.pipedrive.com. Defina PIPEDRIVE_API_TOKEN ou, no ambiente "
+                     "do Claude, adicione a credencial do Pipedrive (site api.pipedrive.com, cabeçalho x-api-token).")
         try:
             d = json.loads(r.stdout)
         except ValueError:
@@ -337,8 +349,11 @@ def main():
         "presets": PRESETS, "entities": ent, "daily_ads": rows, "reach": reach, "deals": deals,
     }
     json.dump(out, open(a.out, "w"), ensure_ascii=False, separators=(",", ":"))
-    print(f"ok: {a.out} · {DATA_START} a {end} · {len(rows)} linhas diárias · {len(ent['ads'])} anúncios · {len(deals)} leads do Meta no CRM",
-          file=sys.stderr)
+    if os.environ.get("GITHUB_ACTIONS"):  # logs de repositório público: sem números
+        print(f"ok: {a.out} gerado, dados até {end}", file=sys.stderr)
+    else:
+        print(f"ok: {a.out} · {DATA_START} a {end} · {len(rows)} linhas diárias · {len(ent['ads'])} anúncios · {len(deals)} leads do Meta no CRM",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":
